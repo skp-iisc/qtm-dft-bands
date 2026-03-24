@@ -1,2 +1,3 @@
-# qtm-dft-bands
-DFT band structures and others calculated using Quantum MASALA. Benchmarks using Quantum ESPRESSO band structures.
+# QTM DFT Bands
+
+DFT band structures and others are calculated using Quantum MASALA. Benchmarks are done using Quantum ESPRESSO band structures.
