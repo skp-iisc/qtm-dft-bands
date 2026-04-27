@@ -31,7 +31,7 @@ reallat = RealLattice.from_alat(alat=10.2,
 )
 
 # Atom Basis
-pseudopot = UPFv2Data.from_file("../pseudo_dir/Si_ONCV_PBE-1.2.upf")
+pseudopot = UPFv2Data.from_file("../pseudo/Si_ONCV_PBE-1.2.upf")
 si_atoms = BasisAtoms(
     "silicon",
     pseudopot,
@@ -42,7 +42,6 @@ si_atoms = BasisAtoms(
 )
 
 crystal = Crystal(reallat, [si_atoms])  # Represents the crystal
-
 
 # Generating k-points from a Monkhorst Pack grid (reduced to the crystal's IBZ)
 mpgrid_shape = (4, 4, 4)
@@ -86,7 +85,6 @@ if comm_world.rank == 0:
     print("\nSCF Routine has exited")
     print(qtmlogger)
 
-# Define high-symmetry points for Si (FCC structure)
 # High-symmetry k-points in crystal coordinates
 L = np.array([0.0, 0.5, 0.0])      # L point
 G = np.array([0.0, 0.0, 0.0])      # Gamma point
@@ -99,7 +97,6 @@ N2 = int(np.linalg.norm(G-X)/del_k)
 N3 = int(np.linalg.norm(X-K)/del_k)
 N4 = int(np.linalg.norm(K-G)/del_k) + 1  # +1 so final G is included
 
-# endpoint=False on all but the last segment avoids duplicate boundary points
 kpts_L_G = np.linspace(L, G, N1, endpoint=False)
 kpts_G_X = np.linspace(G, X, N2, endpoint=False)
 kpts_X_K = np.linspace(X, K, N3, endpoint=False)
@@ -118,7 +115,7 @@ kpts1 = KList(recilat=crystal.recilat,
               k_weights=k_weights,
               coords_typ="cryst")
 
-numbnd1 = 8
+numbnd1 = 12
 out1 = scf(dftcomm, crystal, kpts1, grho, gwfn, 
             numbnd=numbnd1,
             is_spin=False,
@@ -203,11 +200,7 @@ if comm_world.rank == 0:
     # x[0] is k-index, x[2] is band index
     band_data.sort(key=lambda x: (x[0], x[2]))
 
-    # Calculate Fermi energy (Valence Band Maximum)
-    # Si has 4 filled bands. We find the max eigenvalue for band 4.
-    n_val = 4
-    val_energies = [row[3] for row in band_data if row[2] == n_val]
-    e_fermi = max(val_energies) if val_energies else 0.0
+    e_fermi = en1.HO_level / ELECTRONVOLT   # in eV
 
     output_file = "si_bands.dat"
     

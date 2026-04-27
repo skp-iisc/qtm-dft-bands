@@ -1,0 +1,5 @@
+&bands
+prefix = 'Si'
+outdir = './tmp/'
+filband = 'bandx.dat'
+/
