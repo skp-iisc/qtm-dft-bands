@@ -86,32 +86,27 @@ if comm_world.rank == 0:
     print(qtmlogger)
 
 # High-symmetry k-points in crystal coordinates
-L = np.array([0.0, 0.5, 0.0])      # L point
-G = np.array([0.0, 0.0, 0.0])      # Gamma point
-X = np.array([-0.5, 0.0, -0.5])      # X point
-K = np.array([-0.375, 0.25, -0.375]) # K point
+L = np.array([0.0, 0.5, 0.0])
+G = np.array([0.0, 0.0, 0.0])
+X = np.array([-0.5, 0.0, -0.5])
+K = np.array([-0.375, 0.25, -0.375])
 
-del_k = 0.01
-N1 = int(np.linalg.norm(L-G)/del_k)
-N2 = int(np.linalg.norm(G-X)/del_k)
-N3 = int(np.linalg.norm(X-K)/del_k)
-N4 = int(np.linalg.norm(K-G)/del_k) + 1  # +1 so final G is included
+# Use fixed number of k-points per segment (matching QE convention)
+N = 50  # Number of points per segment
+kpts_L_G = np.linspace(L, G, N, endpoint=False)
+kpts_G_X = np.linspace(G, X, N, endpoint=False)
+kpts_X_K = np.linspace(X, K, N, endpoint=False)
+kpts_K_G = np.linspace(K, G, N, endpoint=True)
 
-kpts_L_G = np.linspace(L, G, N1, endpoint=False)
-kpts_G_X = np.linspace(G, X, N2, endpoint=False)
-kpts_X_K = np.linspace(X, K, N3, endpoint=False)
-kpts_K_G = np.linspace(K, G, N4, endpoint=True)
-
-# Combine all segments (no duplicate boundary points)
+# Combine all segments
 k_path = np.vstack([kpts_L_G, kpts_G_X, kpts_X_K, kpts_K_G])
 
-# Create weights for band structure calculation
-# Weights should sum to 1 and represent path distances
+# Create weights
 k_weights = np.ones(len(k_path)) / len(k_path)
 
-# Create kpts1 using KList with crystal coordinates
+# Create KList
 kpts1 = KList(recilat=crystal.recilat, 
-              k_coords=k_path.T,  # Transpose to (3, nkpts) format
+              k_coords=k_path.T,
               k_weights=k_weights,
               coords_typ="cryst")
 
@@ -131,91 +126,68 @@ out1 = scf(dftcomm, crystal, kpts1, grho, gwfn,
 
 scf_converged1, rho1, l_wfn_kgrp1, en1 = out1
 
-# np.save('si4_rho1.npy', rho1.data)
-
 band_data = []
-k_index = 0
 
-# High-symmetry point labels along the path (using LaTeX math strings)
+# High-symmetry point labels
 hsym_labels = ['L', r'$\Gamma$', 'X', 'K', r'$\Gamma$']
 
-# Segment boundaries marking the start index of each segment
-segment_boundaries = [0, N1, N1+N2, N1+N2+N3, N1+N2+N3+N4-1]
+# Use QE reference segment boundaries (k-distances in Angstrom^-1)
+hsym_x = [0.0, 0.866, 1.866, 2.2196, 3.2802]
 
-# True cumulative distance across the whole path (never resets)
-k_distances_cumulative = np.zeros(len(k_path))
+# Compute k-distances in reciprocal space for band data mapping
+b1 = crystal.recilat.recvec[:, 0]
+b2 = crystal.recilat.recvec[:, 1]
+b3 = crystal.recilat.recvec[:, 2]
+
+k_path_cart = np.array([k[0]*b1 + k[1]*b2 + k[2]*b3 for k in k_path])
+k_distances = np.zeros(len(k_path))
 for i in range(1, len(k_path)):
-    k_distances_cumulative[i] = (
-        k_distances_cumulative[i-1] + np.linalg.norm(k_path[i] - k_path[i-1])
-    )
+    k_distances[i] = k_distances[i-1] + np.linalg.norm(k_path_cart[i] - k_path_cart[i-1])
 
-# x-positions of each high-symmetry point along the cumulative path
-hsym_x = [k_distances_cumulative[idx] for idx in segment_boundaries]
+# Rescale k_distances to match QE convention
+if k_distances[-1] > 0:
+    k_distances = k_distances * (hsym_x[-1] / k_distances[-1])
 
-# Collect k-point data from all MPI processes
+# Collect and process band data
 local_band_data = []
-local_k_indices = []
-
 for kgrp in l_wfn_kgrp1:
     for kswfn in kgrp:
         k_point = np.array(kswfn.k_cryst)
-        # Find the global k-index by finding matching k-point in k_path
-        # Since k-points are distributed, we need to find which one this is
-        k_point_cryst_2d = k_point.reshape(-1, 1)
-        
-        # Find closest k-point in k_path (to match due to potential numerical differences)
-        distances = np.linalg.norm(k_path.T - k_point_cryst_2d, axis=0)
+        distances = np.linalg.norm(k_path.T - k_point.reshape(-1, 1), axis=0)
         global_k_index = np.argmin(distances)
         
-        # Determine which segment this k-point belongs to
-        k_dist = k_distances_cumulative[global_k_index]
-        segment_idx = 0
-        for seg_idx, boundary in enumerate(segment_boundaries[1:]):
-            if global_k_index >= boundary:
-                segment_idx = seg_idx + 1
-        
-        # Determine path labels for this segment
-        path_start = hsym_labels[segment_idx]
-        path_end = hsym_labels[segment_idx + 1] if segment_idx + 1 < len(hsym_labels) else hsym_labels[-1]
-
         for band_idx in range(kswfn.numbnd):
             eigenvalue_ev = kswfn.evl[band_idx] / ELECTRONVOLT
-            local_band_data.append([global_k_index, k_dist, band_idx + 1, eigenvalue_ev, path_start, path_end])
-        
-        local_k_indices.append(global_k_index)
+            local_band_data.append([band_idx + 1, k_distances[global_k_index], eigenvalue_ev])
 
-# MPI Gather: collect all band data from all processes
+# MPI Gather
 if MPI4PY_INSTALLED:
-    all_band_data_list = comm_world.comm.gather(local_band_data, root=0)
+    all_band_data = comm_world.comm.gather(local_band_data, root=0)
 else:
-    all_band_data_list = [local_band_data]
+    all_band_data = [local_band_data]
 
 if comm_world.rank == 0:
-    # Combine data from all processes
     band_data = []
-    for band_data_from_process in all_band_data_list:
-        band_data.extend(band_data_from_process)
+    for data in all_band_data:
+        band_data.extend(data)
     
-    # Sort by k-index then band index to ensure proper ordering
-    # x[0] is k-index, x[2] is band index
-    band_data.sort(key=lambda x: (x[0], x[2]))
+    # Sort by band index, then by k-distance
+    band_data.sort(key=lambda x: (x[0], x[1]))
 
-    e_fermi = en1.HO_level / ELECTRONVOLT   # in eV
+    e_fermi = en1.HO_level / ELECTRONVOLT
 
-    output_file = "si_bands.dat"
-    
-    # Write custom file with mixed types (floats and strings)
-    with open(output_file, 'w') as f:
-        f.write(f'# Fermi Energy: {e_fermi:.6f}\n')
-        f.write('# k-index  k-cumul-dist  band  eigenvalue(eV)  path_start  path_end\n')
-        for row in band_data:
-            k_idx, k_dist, band_idx, ev, p_start, p_end = row
-            # Ensure raw strings are written plainly
-            f.write(f"{k_idx:4d} {k_dist:14.8f} {band_idx:4d} {ev:14.8f} {p_start} {p_end}\n")
+    # Write output file
+    with open("si_bands.dat", 'w') as f:
+        f.write(f"# Fermi Energy: {e_fermi:.6f}\n")
+        f.write(f"# Segment boundaries (k-distance): {' '.join(f'{x:.6f}' for x in hsym_x)}\n")
+        f.write(f"# Segment labels: {' '.join(hsym_labels)}\n")
+        
+        current_band = None
+        for band_idx, k_dist, ev in band_data:
+            if current_band is not None and band_idx != current_band:
+                f.write('\n')
+            f.write(f"{k_dist:10.4f} {ev:10.4f}\n")
+            current_band = band_idx
 
-    print('='*60+"\nNSCF Routine has exited\n"+'='*60)
-    print("Path for bandstructure: L-G-X-K-G\n"+'-'*60)
-
-    print(f"\nBand structure data saved to: {output_file}.")
-    print(f"\nTotal k-points collected: {len(band_data) // numbnd1}")
+    print('='*60+f"\nBand structure data saved to: si_bands.dat")
 

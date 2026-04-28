@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 
 data = "qe-bands/bandx.dat.gnu"
 
-EF = 6.457
+EF = 6.456943
 kvals = [0.0, 0.866, 1.866, 2.2196, 3.2802]
-klabels = ['L', r'$\Gamma$', 'X', 'U', r'$\Gamma$']
+klabels = ['L', r'$\Gamma$', 'X', 'K', r'$\Gamma$']
 
 kpts, ens = [], []
 kpt, en = [], []
@@ -24,17 +24,17 @@ with open(data, 'r') as f:
 nbnd = len(kpts)
 print(f"Plotting {nbnd} bands...")
 
-plt.figure(figsize=(8, 6))
+plt.figure(figsize=(5, 5))
 for i in range(nbnd):
     plt.plot(kpts[i], ens[i], color='blue')
 
 for k in kvals:
     plt.axvline(k, color='black', linestyle='-', linewidth=0.5)
-plt.axhline(0.0, linestyle='--', color='black')
+plt.axhline(0.0, linestyle='--', color='red')
 
 plt.xticks(kvals, klabels)
 plt.xlim(min(kvals), max(kvals))
-# plt.ylim(-10, 15)
+plt.ylim(-15, 10)
 plt.ylabel(r"Energy - $E_F$ (eV)")
 plt.tight_layout()
 plt.savefig("qe-bands/si_bands.png", dpi=300)
